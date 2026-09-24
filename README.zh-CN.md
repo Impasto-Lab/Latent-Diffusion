@@ -47,18 +47,21 @@ python generate.py --device cuda --steps 2 --output outputs/cuda-smoke.png
 
 ## 项目结构与阅读入口
 
-先看根目录的 `generate.py`：解析参数与选择设备 → 加载权重 → 采样潜变量 → 解码并保存图像。然后看 `inference/sampler.py` 中的文本编码、初始噪声、CFG 和 DDIM 循环；各模型的计算进入 `models/`。
+根目录的 `generate.py` 按执行顺序展示完整推理：解析参数与选择设备 → 加载权重 → 编码文本 → 生成初始噪声 → CFG 与 DDIM 循环 → 解码并保存图像。各模型内部的计算再进入 `models/` 查看。
 
 ```text
-generate.py
-├── inference/sampler.py     # 文本编码、CFG、DDIM、图像解码
-├── models/bert.py           # 文本编码器
-├── models/unet.py           # 条件去噪网络
-├── models/layers.py         # ResNet、attention、上下采样
-├── models/vqvae.py          # KL 自编码器
-├── models/scheduler.py      # DDIM 时间步与更新公式
-├── models/loader.py         # 本地模型与预训练权重绑定
-└── utils/                   # 命令行、设备、输出和形状调试
+Latent-Diffusions/
+├── generate.py              # 完整文生图推理流程
+├── models/
+│   ├── bert.py              # 文本编码器
+│   ├── unet.py              # 条件去噪网络
+│   ├── layers.py            # ResNet、attention、上下采样
+│   ├── vqvae.py             # KL 自编码器
+│   ├── scheduler.py         # DDIM 时间步与更新公式
+│   └── loader.py            # 本地模型与预训练权重绑定
+├── utils/                   # 命令行、设备、输出和形状调试
+├── scripts/                 # 预训练权重下载
+└── tests/                   # 模型与推理数值测试
 ```
 
 主要数据路径为：文本 token → `[1,77,1280]` 条件表示；初始噪声 → `[1,4,32,32]` 潜变量；U-Net 逐步预测噪声；最终潜变量由自编码器解码为 `[1,3,256,256]` 图像。
@@ -130,7 +133,7 @@ Transformers 只负责读取 BERT tokenizer 词表。Diffusers 只存在于测�
 
 方括号表示张量形状，第一维为 batch。
 
-1. **编码条件。** `encode(prompt)` 和 `encode("")` 各将文本转成 `[1, 77]` 的 token IDs，再经文本编码器返回 `context [1, 77, 1280]` 和 `unconditional [1, 77, 1280]`。`guidance=1` 时跳过 `unconditional`。
+1. **编码条件。** `encode(args.prompt)` 和 `encode("")` 各将文本转成 `[1, 77]` 的 token IDs，再经文本编码器返回 `context [1, 77, 1280]` 和 `unconditional [1, 77, 1280]`。`guidance=1` 时跳过 `unconditional`。
 2. **生成初始噪声。** 用 `seed` 从标准正态分布采样 `latents [1, 4, 32, 32]`；32×32 是 256×256 经自编码器压缩 8 倍后的空间尺寸。
 3. **设置时间步。** `scheduler.set_timesteps(50)` 生成 `[981, 961, …, 21, 1]`，之后按此顺序去噪。
 4. **U-Net 预测噪声。** 对照 `ConditionalUNet.forward(sample, timestep, encoder_hidden_states)` 看三个输入：
@@ -221,8 +224,8 @@ $$z_p=\sqrt{\bar\alpha_p}\hat z_0+\sqrt{1-\bar\alpha_p-\sigma_t^2}\hat\epsilon+\
 | 感知压缩 | KL 自编码器，f=8 | `models/vqvae.py` 的本地 `AutoencoderKL` |
 | 文本条件 | tokenizer + Transformer | tokenizer + `models/bert.py` |
 | 噪声预测 | 条件 U-Net | `models/unet.py` 的本地 `ConditionalUNet` |
-| 采样 | DDIM + CFG | `inference/sampler.py` 中的 `sample_latents()` |
-| 输出解码 | 一次调用 decoder | `inference/sampler.py` 中的 `decode_latents()` |
+| 采样 | DDIM + CFG | `generate.py` 中的 U-Net 与 scheduler 循环 |
+| 输出解码 | 一次调用 decoder | `generate.py` 中的自编码器解码 |
 | 参数规模 | 文生图约 1.45B | 来自作者公开转换权重，另外加载图像自编码器 |
 | 本机执行 | 非论文实验环境 | Mac：文本/解码 CPU float32、U-Net MPS float16；NVIDIA：默认全组件 CUDA float16 |
 
@@ -230,7 +233,7 @@ $$z_p=\sqrt{\bar\alpha_p}\hat z_0+\sqrt{1-\bar\alpha_p-\sigma_t^2}\hat\epsilon+\
 
 本地 scheduler 显式使用作者的 sqrt 插值 beta 曲线和 DDIM 更新。MPS/CUDA、半精度和算子实现仍不保证得到论文中的完全相同图片。本项目验证的是算法与本机推理链路，不声称复现训练或完整基准指标。
 
-建议先看论文 Figure 3 和 §3.1–3.3，再对照 `inference/sampler.py` 中 `sample_latents()` 的四个阶段，按上文「模型实现与调试」的顺序进入本地 BERT、U-Net、attention 和 KL 自编码器。可用 `--trace-shapes` 核对张量形状；随后固定 seed，只改变 `guidance` 或 `steps`，观察条件强度和采样长度对结果的影响。
+建议先看论文 Figure 3 和 §3.1–3.3，再对照 `generate.py` 中的步骤 3–6，按上文「模型实现与调试」的顺序进入本地 BERT、U-Net、attention 和 KL 自编码器。可用 `--trace-shapes` 核对张量形状；随后固定 seed，只改变 `guidance` 或 `steps`，观察条件强度和采样长度对结果的影响。
 
 实现依据：[作者噪声/时间步代码](https://github.com/CompVis/latent-diffusion/blob/main/ldm/modules/diffusionmodules/util.py)、[作者 DDIM 采样器](https://github.com/CompVis/latent-diffusion/blob/main/ldm/models/diffusion/ddim.py)。测试使用 [Diffusers 0.35.1 LDM 实现](https://github.com/huggingface/diffusers/blob/v0.35.1/src/diffusers/pipelines/latent_diffusion/pipeline_latent_diffusion.py) 作为独立数值参考。
 

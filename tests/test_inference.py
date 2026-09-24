@@ -1,13 +1,14 @@
 """CPU tests with tiny real networks: no weights/downloads/GPU required."""
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
 from diffusers import AutoencoderKL, DDIMScheduler, LDMTextToImagePipeline, UNet2DConditionModel
 from diffusers.pipelines.latent_diffusion.pipeline_latent_diffusion import LDMBertConfig, LDMBertModel
 
-from inference.sampler import decode_latents, sample_latents
+import generate
 from models.bert import LDMBertModel as LocalBert
 from models.components import LDMComponents
 from models.scheduler import DDIMScheduler as LocalDDIMScheduler
@@ -83,24 +84,35 @@ class InferenceTests(unittest.TestCase):
             model.eval()
         cls.reference.set_progress_bar_config(disable=True)
 
-    def sample(self, **overrides):
-        kwargs = dict(height=64, width=64, steps=4, guidance=5, eta=0, seed=123, progress=False)
-        kwargs.update(overrides)
-        return sample_latents(self.components, "fox", **kwargs)
+    def generate_pixels(self, **overrides):
+        options = dict(height=64, width=64, steps=4, guidance=5, eta=0, seed=123)
+        options.update(overrides)
+        argv = ["generate.py", "--prompt", "fox", "--device", "cpu"]
+        for name, value in options.items():
+            argv.extend((f"--{name}", str(value)))
+        with (
+            patch("sys.argv", argv),
+            patch("generate.load_components", return_value=self.components),
+            patch("generate.save_image") as saved,
+            patch("generate.tqdm", side_effect=lambda steps, **_: steps),
+            patch("builtins.print"),
+        ):
+            generate.main()
+        return saved.call_args.args[0]
 
     def test_matches_upstream_pipeline_with_and_without_cfg(self):
         for guidance in (1.0, 5.0):
             with self.subTest(guidance=guidance):
-                actual = decode_latents(self.components, self.sample(guidance=guidance))
+                actual = self.generate_pixels(guidance=guidance)
                 expected = self.reference("fox", height=64, width=64, num_inference_steps=4,
                     guidance_scale=guidance, eta=0,
                     generator=torch.Generator("cpu").manual_seed(123), output_type="np").images
                 np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
 
     def test_stochastic_ddim_respects_seed(self):
-        a = self.sample(eta=1)
-        torch.testing.assert_close(a, self.sample(eta=1), rtol=0, atol=0)
-        self.assertFalse(torch.equal(a, self.sample(eta=1, seed=124)))
+        a = self.generate_pixels(eta=1)
+        np.testing.assert_array_equal(a, self.generate_pixels(eta=1))
+        self.assertFalse(np.array_equal(a, self.generate_pixels(eta=1, seed=124)))
 
     def test_original_schedule_matches_author_formula(self):
         scheduler = LocalDDIMScheduler(dict(

@@ -26,8 +26,7 @@ The image is saved to `outputs/`. Use `--output outputs/fox.png` to choose a pat
 
 ## Project layout
 
-- `generate.py` — image generation entry point
-- `inference/` — sampling and image decoding
+- `generate.py` — complete text-to-image inference flow
 - `models/` — local model definitions, weight loading, and DDIM sampler
 - `scripts/` — pretrained checkpoint download
 - `utils/` — device selection, command-line options, output, and shape tracing
