@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.cache/
+.vscode/
+
+# Keep model-loading source code tracked; ignore only downloaded checkpoints.
+models/ldm-text2im-large-256/
+outputs/
+.DS_Store
+.pytest_cache/

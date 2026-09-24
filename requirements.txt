@@ -1,0 +1,7 @@
+# Install PyTorch first with the wheel appropriate for macOS or NVIDIA CUDA.
+# See README.md. Keeping torch out of this file avoids replacing a CUDA wheel.
+transformers==4.56.2
+huggingface-hub==0.34.4
+numpy>=1.26
+Pillow>=10
+tqdm>=4.66
