@@ -13,40 +13,40 @@ def _tensor_shapes(value):
     return []
 
 
-def install_shape_tracing(components):
+def install_shape_tracing(text_encoder, unet, autoencoder):
     """Print each major stage once, even though the U-Net runs many times."""
     targets = [
-        ("bert.token_embedding", components.text_encoder.model.embed_tokens),
-        ("bert.layer.0", components.text_encoder.model.layers[0]),
+        ("bert.token_embedding", text_encoder.model.embed_tokens),
+        ("bert.layer.0", text_encoder.model.layers[0]),
         (
-            f"bert.layer.{len(components.text_encoder.model.layers) - 1}",
-            components.text_encoder.model.layers[-1],
+            f"bert.layer.{len(text_encoder.model.layers) - 1}",
+            text_encoder.model.layers[-1],
         ),
-        ("bert.output_norm", components.text_encoder.model.layer_norm),
-        ("unet.input_conv", components.unet.conv_in),
+        ("bert.output_norm", text_encoder.model.layer_norm),
+        ("unet.input_conv", unet.conv_in),
     ]
     targets.extend(
         (f"unet.down.{index}", block)
-        for index, block in enumerate(components.unet.down_blocks)
+        for index, block in enumerate(unet.down_blocks)
     )
-    targets.append(("unet.mid", components.unet.mid_block))
+    targets.append(("unet.mid", unet.mid_block))
     targets.extend(
         (f"unet.up.{index}", block)
-        for index, block in enumerate(components.unet.up_blocks)
+        for index, block in enumerate(unet.up_blocks)
     )
-    targets.append(("unet.output_conv", components.unet.conv_out))
+    targets.append(("unet.output_conv", unet.conv_out))
     targets.extend(
         [
-            ("vqvae.post_quant", components.autoencoder.post_quant_conv),
-            ("vqvae.decoder.input_conv", components.autoencoder.decoder.conv_in),
-            ("vqvae.decoder.mid", components.autoencoder.decoder.mid_block),
+            ("vqvae.post_quant", autoencoder.post_quant_conv),
+            ("vqvae.decoder.input_conv", autoencoder.decoder.conv_in),
+            ("vqvae.decoder.mid", autoencoder.decoder.mid_block),
         ]
     )
     targets.extend(
         (f"vqvae.decoder.up.{index}", block)
-        for index, block in enumerate(components.autoencoder.decoder.up_blocks)
+        for index, block in enumerate(autoencoder.decoder.up_blocks)
     )
-    targets.append(("vqvae.decoder.output_conv", components.autoencoder.decoder.conv_out))
+    targets.append(("vqvae.decoder.output_conv", autoencoder.decoder.conv_out))
 
     seen = set()
     captured_inputs = {}

@@ -10,7 +10,6 @@ from diffusers.pipelines.latent_diffusion.pipeline_latent_diffusion import LDMBe
 
 import generate
 from models.bert import LDMBertModel as LocalBert
-from models.components import LDMComponents
 from models.scheduler import DDIMScheduler as LocalDDIMScheduler
 from models.unet import ConditionalUNet
 from models.vqvae import AutoencoderKL as LocalAutoencoderKL
@@ -64,13 +63,11 @@ class InferenceTests(unittest.TestCase):
         scheduler = LocalDDIMScheduler(dict(
             beta_start=0.00085, beta_end=0.012, num_train_timesteps=1000,
         ))
-        cls.components = LDMComponents(
-            tokenizer=tokenizer,
-            text_encoder=local_bert,
-            unet=local_unet,
-            autoencoder=local_autoencoder,
-            scheduler=scheduler,
-        )
+        cls.tokenizer = tokenizer
+        cls.text_encoder = local_bert
+        cls.unet = local_unet
+        cls.autoencoder = local_autoencoder
+        cls.scheduler = scheduler
         cls.reference = LDMTextToImagePipeline(
             bert=bert,
             tokenizer=tokenizer,
@@ -90,9 +87,24 @@ class InferenceTests(unittest.TestCase):
         argv = ["generate.py", "--prompt", "fox", "--device", "cpu"]
         for name, value in options.items():
             argv.extend((f"--{name}", str(value)))
+
+        def config_for(path):
+            models = {
+                "bert": self.text_encoder,
+                "unet": self.unet,
+                "vqvae": self.autoencoder,
+                "scheduler": self.scheduler,
+            }
+            return dict(models[path.parent.name].config)
+
         with (
             patch("sys.argv", argv),
-            patch("generate.load_components", return_value=self.components),
+            patch("generate.check_model_files"),
+            patch("generate.read_config", side_effect=config_for),
+            patch("generate.BertTokenizer.from_pretrained", return_value=self.tokenizer),
+            patch("generate.load_pretrained_model", side_effect=[
+                self.text_encoder, self.unet, self.autoencoder,
+            ]),
             patch("generate.save_image") as saved,
             patch("generate.tqdm", side_effect=lambda steps, **_: steps),
             patch("builtins.print"),
