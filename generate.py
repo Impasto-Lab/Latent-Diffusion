@@ -84,13 +84,11 @@ def main():
 
     with torch.inference_mode():
         # 3. Encode the prompt and the empty prompt for classifier-free guidance.
-        max_length = text_encoder.max_sequence_length
-
         def encode(text):
             tokens = tokenizer(
                 text,
                 padding="max_length",
-                max_length=max_length,
+                max_length=text_encoder.max_sequence_length,
                 truncation=True,
                 return_tensors="pt",
             )
