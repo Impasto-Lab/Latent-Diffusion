@@ -1,7 +1,7 @@
 """Explicit local DDIM timestep and latent-update equations."""
 import torch
 
-from models.layers import ConfigDict
+from models.config import ConfigDict
 
 
 class DDIMScheduler:
@@ -39,17 +39,6 @@ class DDIMScheduler:
         self.timesteps = torch.arange(steps, dtype=torch.int64).mul(ratio).flip(0)
         self.timesteps = self.timesteps + self.config.steps_offset
 
-    def _variance(self, timestep, previous_timestep):
-        alpha_t = self.alphas_cumprod[timestep]
-        alpha_previous = (
-            self.alphas_cumprod[previous_timestep]
-            if previous_timestep >= 0
-            else self.alphas_cumprod[0]
-        )
-        beta_t = 1 - alpha_t
-        beta_previous = 1 - alpha_previous
-        return (beta_previous / beta_t) * (1 - alpha_t / alpha_previous)
-
     def step(self, predicted_noise, timestep, sample, *, eta=0.0, generator=None):
         """Apply equations 12 and 16 from DDIM to obtain the previous latent."""
         if self.num_inference_steps is None:
@@ -59,6 +48,7 @@ class DDIMScheduler:
             timestep - self.config.num_train_timesteps // self.num_inference_steps
         )
         alpha_t = self.alphas_cumprod[timestep]
+        # The original sampler ends at alpha_bar[0], rather than at 1.
         alpha_previous = (
             self.alphas_cumprod[previous_timestep]
             if previous_timestep >= 0
@@ -66,11 +56,15 @@ class DDIMScheduler:
         )
         beta_t = 1 - alpha_t
 
+        # Estimate the clean latent z_0 from the current latent and noise prediction.
         predicted_original = (
             sample - beta_t.sqrt() * predicted_noise
         ) / alpha_t.sqrt()
 
-        sigma = eta * self._variance(timestep, previous_timestep).sqrt()
+        beta_previous = 1 - alpha_previous
+        variance = (beta_previous / beta_t) * (1 - alpha_t / alpha_previous)
+        sigma = eta * variance.sqrt()
+        # Combine the clean estimate, noise direction, and optional random noise.
         direction = (1 - alpha_previous - sigma.square()).sqrt() * predicted_noise
         previous_sample = alpha_previous.sqrt() * predicted_original + direction
 

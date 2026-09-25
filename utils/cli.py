@@ -31,11 +31,6 @@ def build_parser():
     parser.add_argument(
         "--output", type=Path, help="PNG path; existing files are not overwritten"
     )
-    parser.add_argument(
-        "--trace-shapes",
-        action="store_true",
-        help="Print each major model stage's tensor shapes on its first forward",
-    )
     return parser
 
 

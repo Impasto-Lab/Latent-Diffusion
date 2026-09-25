@@ -2,8 +2,8 @@
 import torch
 from torch import nn
 
+from models.config import ConfigDict
 from models.layers import (
-    ConfigDict,
     Downsample2D,
     ResnetBlock2D,
     Upsample2D,
@@ -143,7 +143,7 @@ class Decoder(nn.Module):
 
 
 class DiagonalGaussianDistribution:
-    """Mean/log-variance parameterization produced by the VQ-VAE encoder."""
+    """Mean/log-variance parameterization produced by the KL encoder."""
 
     def __init__(self, parameters):
         self.mean, self.logvar = parameters.chunk(2, dim=1)
@@ -173,12 +173,14 @@ class AutoencoderKL(nn.Module):
             "layers_per_block", "scaling_factor",
         )})
         self.config = config
+        # Retain the encoder for reconstruction examples and checkpoint compatibility.
         self.encoder = Encoder(config)
         self.decoder = Decoder(config)
         self.quant_conv = nn.Conv2d(2 * config.latent_channels, 2 * config.latent_channels, 1)
         self.post_quant_conv = nn.Conv2d(config.latent_channels, config.latent_channels, 1)
 
     def encode(self, image):
+        # The KL encoder predicts a Gaussian posterior, not discrete VQ codes.
         moments = self.quant_conv(self.encoder(image))
         return DiagonalGaussianDistribution(moments)
 

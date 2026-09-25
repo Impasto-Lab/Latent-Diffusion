@@ -7,4 +7,3 @@ __pycache__/
 models/ldm-text2im-large-256/
 outputs/
 .DS_Store
-.pytest_cache/

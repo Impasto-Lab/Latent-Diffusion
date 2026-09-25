@@ -6,8 +6,8 @@ input convolution -> four down blocks -> bottleneck -> four up blocks -> noise.
 import torch
 from torch import nn
 
+from models.config import ConfigDict
 from models.layers import (
-    ConfigDict,
     Downsample2D,
     ResnetBlock2D,
     SpatialTransformer,
@@ -29,37 +29,8 @@ class TimestepEmbedding(nn.Module):
 
 
 class DownBlock2D(nn.Module):
-    def __init__(self, in_channels, out_channels, temb_channels, layers, add_downsample):
-        super().__init__()
-        self.resnets = nn.ModuleList(
-            [
-                ResnetBlock2D(
-                    in_channels if index == 0 else out_channels,
-                    out_channels,
-                    temb_channels=temb_channels,
-                    eps=1e-5,
-                )
-                for index in range(layers)
-            ]
-        )
-        self.downsamplers = (
-            nn.ModuleList([Downsample2D(out_channels, padding=1)])
-            if add_downsample
-            else None
-        )
+    """ResNet layers, optional text attention, then optional downsampling."""
 
-    def forward(self, hidden, temb):
-        new_skips = []
-        for resnet in self.resnets:
-            hidden = resnet(hidden, temb)
-            new_skips.append(hidden)
-        if self.downsamplers is not None:
-            hidden = self.downsamplers[0](hidden)
-            new_skips.append(hidden)
-        return hidden, new_skips
-
-
-class CrossAttnDownBlock2D(nn.Module):
     def __init__(
         self,
         in_channels,
@@ -84,7 +55,7 @@ class CrossAttnDownBlock2D(nn.Module):
         )
         self.attentions = nn.ModuleList(
             [SpatialTransformer(out_channels, context_dim, heads) for _ in range(layers)]
-        )
+        ) if context_dim is not None else None
         self.downsamplers = (
             nn.ModuleList([Downsample2D(out_channels, padding=1)])
             if add_downsample
@@ -95,7 +66,9 @@ class CrossAttnDownBlock2D(nn.Module):
         new_skips = []
         for layer_index, resnet in enumerate(self.resnets):
             hidden = resnet(hidden, temb)
-            hidden = self.attentions[layer_index](hidden, context)
+            if self.attentions is not None:
+                hidden = self.attentions[layer_index](hidden, context)
+            # Keep features at each resolution for the matching up-block layer.
             new_skips.append(hidden)
         if self.downsamplers is not None:
             hidden = self.downsamplers[0](hidden)
@@ -104,43 +77,8 @@ class CrossAttnDownBlock2D(nn.Module):
 
 
 class UpBlock2D(nn.Module):
-    def __init__(
-        self,
-        skip_channels,
-        out_channels,
-        previous_channels,
-        temb_channels,
-        layers,
-        add_upsample,
-    ):
-        super().__init__()
-        resnets = []
-        for index in range(layers):
-            current_skip_channels = skip_channels if index == layers - 1 else out_channels
-            current_channels = previous_channels if index == 0 else out_channels
-            resnets.append(
-                ResnetBlock2D(
-                    current_channels + current_skip_channels,
-                    out_channels,
-                    temb_channels=temb_channels,
-                    eps=1e-5,
-                )
-            )
-        self.resnets = nn.ModuleList(resnets)
-        self.upsamplers = (
-            nn.ModuleList([Upsample2D(out_channels)]) if add_upsample else None
-        )
+    """Consume skip features, apply ResNets/attention, then optionally upsample."""
 
-    def forward(self, hidden, skip_features, temb):
-        for resnet in self.resnets:
-            skip = skip_features.pop()
-            hidden = resnet(torch.cat([hidden, skip], dim=1), temb)
-        if self.upsamplers is not None:
-            hidden = self.upsamplers[0](hidden)
-        return hidden
-
-
-class CrossAttnUpBlock2D(nn.Module):
     def __init__(
         self,
         skip_channels,
@@ -171,13 +109,15 @@ class CrossAttnUpBlock2D(nn.Module):
         )
         self.attentions = nn.ModuleList(
             [SpatialTransformer(out_channels, context_dim, heads) for _ in range(layers)]
-        )
+        ) if context_dim is not None else None
 
     def forward(self, hidden, skip_features, temb, context):
         for layer_index, resnet in enumerate(self.resnets):
+            # Pop in reverse down-path order; concatenate channels, not pixels.
             skip = skip_features.pop()
             hidden = resnet(torch.cat([hidden, skip], dim=1), temb)
-            hidden = self.attentions[layer_index](hidden, context)
+            if self.attentions is not None:
+                hidden = self.attentions[layer_index](hidden, context)
         if self.upsamplers is not None:
             hidden = self.upsamplers[0](hidden)
         return hidden
@@ -214,6 +154,7 @@ class ConditionalUNet(nn.Module):
 
         channels = list(config.block_out_channels)
         time_channels = channels[0] * 4
+        # This legacy config field stores the number of heads, not their width.
         heads = config.attention_head_dim
         self.conv_in = nn.Conv2d(config.in_channels, channels[0], 3, padding=1)
         self.time_embedding = TimestepEmbedding(channels[0], time_channels)
@@ -230,27 +171,21 @@ class ConditionalUNet(nn.Module):
             output_channels = channels[level]
             add_downsample = level < len(channels) - 1
 
-            if block_type == "CrossAttnDownBlock2D":
-                down_block = CrossAttnDownBlock2D(
-                    in_channels=input_channels,
-                    out_channels=output_channels,
-                    temb_channels=time_channels,
-                    layers=config.layers_per_block,
-                    add_downsample=add_downsample,
-                    context_dim=config.cross_attention_dim,
-                    heads=heads,
-                )
-            elif block_type == "DownBlock2D":
-                down_block = DownBlock2D(
-                    in_channels=input_channels,
-                    out_channels=output_channels,
-                    temb_channels=time_channels,
-                    layers=config.layers_per_block,
-                    add_downsample=add_downsample,
-                )
-            else:
+            if block_type not in ("DownBlock2D", "CrossAttnDownBlock2D"):
                 raise ValueError(f"Unknown down block type: {block_type}")
-
+            # The checkpoint names two block types; only attention differs.
+            context_dim = (
+                config.cross_attention_dim if block_type == "CrossAttnDownBlock2D" else None
+            )
+            down_block = DownBlock2D(
+                in_channels=input_channels,
+                out_channels=output_channels,
+                temb_channels=time_channels,
+                layers=config.layers_per_block,
+                add_downsample=add_downsample,
+                context_dim=context_dim,
+                heads=heads,
+            )
             self.down_blocks.append(down_block)
             input_channels = output_channels
 
@@ -267,29 +202,22 @@ class ConditionalUNet(nn.Module):
             skip_channels = reversed_channels[min(level + 1, len(channels) - 1)]
             add_upsample = level < len(channels) - 1
 
-            if block_type == "CrossAttnUpBlock2D":
-                up_block = CrossAttnUpBlock2D(
-                    skip_channels=skip_channels,
-                    out_channels=output_channels,
-                    previous_channels=previous_channels,
-                    temb_channels=time_channels,
-                    layers=config.layers_per_block + 1,
-                    add_upsample=add_upsample,
-                    context_dim=config.cross_attention_dim,
-                    heads=heads,
-                )
-            elif block_type == "UpBlock2D":
-                up_block = UpBlock2D(
-                    skip_channels=skip_channels,
-                    out_channels=output_channels,
-                    previous_channels=previous_channels,
-                    temb_channels=time_channels,
-                    layers=config.layers_per_block + 1,
-                    add_upsample=add_upsample,
-                )
-            else:
+            if block_type not in ("UpBlock2D", "CrossAttnUpBlock2D"):
                 raise ValueError(f"Unknown up block type: {block_type}")
-
+            context_dim = (
+                config.cross_attention_dim if block_type == "CrossAttnUpBlock2D" else None
+            )
+            up_block = UpBlock2D(
+                skip_channels=skip_channels,
+                out_channels=output_channels,
+                previous_channels=previous_channels,
+                temb_channels=time_channels,
+                # Extra ResNets consume the skips from conv_in and downsamplers.
+                layers=config.layers_per_block + 1,
+                add_upsample=add_upsample,
+                context_dim=context_dim,
+                heads=heads,
+            )
             self.up_blocks.append(up_block)
             previous_channels = output_channels
         self.conv_norm_out = group_norm(channels[0], config.norm_eps)
@@ -311,19 +239,13 @@ class ConditionalUNet(nn.Module):
         hidden = self.conv_in(sample)
         skip_features = [hidden]
         for down_block in self.down_blocks:
-            if isinstance(down_block, CrossAttnDownBlock2D):
-                hidden, new_skips = down_block(hidden, temb, encoder_hidden_states)
-            else:
-                hidden, new_skips = down_block(hidden, temb)
+            hidden, new_skips = down_block(hidden, temb, encoder_hidden_states)
             skip_features.extend(new_skips)
 
         hidden = self.mid_block(hidden, temb, encoder_hidden_states)
 
         for up_block in self.up_blocks:
-            if isinstance(up_block, CrossAttnUpBlock2D):
-                hidden = up_block(hidden, skip_features, temb, encoder_hidden_states)
-            else:
-                hidden = up_block(hidden, skip_features, temb)
+            hidden = up_block(hidden, skip_features, temb, encoder_hidden_states)
 
         if skip_features:
             raise RuntimeError("U-Net up blocks did not consume all skip features.")

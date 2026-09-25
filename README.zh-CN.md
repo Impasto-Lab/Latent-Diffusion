@@ -38,20 +38,20 @@ noise = noise_unconditional + guidance * (noise_conditional - noise_unconditiona
 | `timestep` | 当前时间步扩展到 batch=2；正余弦编码得到 `[2, 320]`，再经 `Linear → SiLU → Linear` 得到 `temb [2, 1280]` |
 | `encoder_hidden_states` | `model_context [2, 77, 1280]`，为 cross-attention 提供文本条件 |
 
-特征图依次经过下列模块。**输出形状均指整个模块执行完毕后的 `hidden`。**
+特征图依次经过下列模块。**输出形状均指整个模块执行完毕后的 `hidden`。** 配置中的 `CrossAttnDownBlock2D` / `CrossAttnUpBlock2D`，分别由本地 `DownBlock2D` / `UpBlock2D` 开启注意力实现。
 
 | 阶段 | 模块 / 操作 | 输出形状 |
 | --- | --- | --- |
 | 输入 | `conv_in` | `[2, 320, 32, 32]` |
-| 下行 1 | `CrossAttnDownBlock2D`（含下采样） | `[2, 320, 16, 16]` |
-| 下行 2 | `CrossAttnDownBlock2D`（含下采样） | `[2, 640, 8, 8]` |
-| 下行 3 | `CrossAttnDownBlock2D`（含下采样） | `[2, 1280, 4, 4]` |
+| 下行 1 | `DownBlock2D`：注意力、下采样 | `[2, 320, 16, 16]` |
+| 下行 2 | `DownBlock2D`：注意力、下采样 | `[2, 640, 8, 8]` |
+| 下行 3 | `DownBlock2D`：注意力、下采样 | `[2, 1280, 4, 4]` |
 | 下行 4 | `DownBlock2D`，不下采样 | `[2, 1280, 4, 4]` |
 | 瓶颈 | `ResNet → SpatialTransformer → ResNet` | `[2, 1280, 4, 4]` |
 | 上行 1 | `UpBlock2D`（含上采样） | `[2, 1280, 8, 8]` |
-| 上行 2 | `CrossAttnUpBlock2D`（含上采样） | `[2, 1280, 16, 16]` |
-| 上行 3 | `CrossAttnUpBlock2D`（含上采样） | `[2, 640, 32, 32]` |
-| 上行 4 | `CrossAttnUpBlock2D`，不上采样 | `[2, 320, 32, 32]` |
+| 上行 2 | `UpBlock2D`：注意力、上采样 | `[2, 1280, 16, 16]` |
+| 上行 3 | `UpBlock2D`：注意力、上采样 | `[2, 640, 32, 32]` |
+| 上行 4 | `UpBlock2D`：注意力，不上采样 | `[2, 320, 32, 32]` |
 | 输出 | `GroupNorm → SiLU → conv_out` | `[2, 4, 32, 32]` |
 
 - **时间与文本条件：** ResNet 注入 `temb`，可改变通道数；带注意力的块再经 `SpatialTransformer`（self-attention → cross-attention → 前馈网络）融合文本，其输入、输出形状相同。

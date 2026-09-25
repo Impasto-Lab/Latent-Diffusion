@@ -14,9 +14,8 @@ from models.config import LATENT_SCALING_FACTOR, MODEL_DIR
 from models.loader import check_model_files, load_pretrained_model, read_config
 from models.scheduler import DDIMScheduler
 from models.unet import ConditionalUNet
-from models.vqvae import AutoencoderKL
+from models.autoencoder import AutoencoderKL
 from utils.cli import build_parser, validate_generation_args
-from utils.debug import install_shape_tracing
 from utils.environment import select_device, select_precision
 from utils.output import resolve_output_path, save_image
 
@@ -67,6 +66,7 @@ def main():
         dtype,
     )
 
+    # The published directory is named "vqvae", but contains a KL autoencoder.
     autoencoder_config = read_config(MODEL_DIR / "vqvae" / "config.json")
     autoencoder_config["scaling_factor"] = LATENT_SCALING_FACTOR
     autoencoder = load_pretrained_model(
@@ -79,8 +79,6 @@ def main():
 
     scheduler_config = read_config(MODEL_DIR / "scheduler" / "scheduler_config.json")
     scheduler = DDIMScheduler(scheduler_config)
-    if args.trace_shapes:
-        install_shape_tracing(text_encoder, unet, autoencoder)
 
     with torch.inference_mode():
         # 3. Encode the prompt and the empty prompt for classifier-free guidance.
@@ -96,12 +94,16 @@ def main():
             return text_encoder(tokens.input_ids.to(device))
 
         context = encode(args.prompt)
-        unconditional = encode("") if args.guidance != 1.0 else None
-        model_context = (
-            torch.cat([unconditional, context]) if unconditional is not None else context
-        )
+        use_guidance = args.guidance != 1.0
+        # Empty-prompt predictions come first in the doubled CFG batch.
+        if use_guidance:
+            unconditional = encode("")
+            model_context = torch.cat([unconditional, context])
+        else:
+            model_context = context
 
         # 4. Start from Gaussian noise in the autoencoder's latent space.
+        # Sample on CPU so CUDA, MPS, and CPU all use the same generator backend.
         generator = torch.Generator(device="cpu").manual_seed(args.seed)
         factor = 2 ** (len(autoencoder.config.block_out_channels) - 1)
         shape = (
@@ -117,18 +119,11 @@ def main():
 
         # 5. Predict noise with the U-Net, then update the latent with DDIM.
         for timestep in tqdm(scheduler.timesteps, desc="DDIM"):
-            if unconditional is None:
-                noise = unet(
-                    latents, timestep, encoder_hidden_states=context
-                )
-            else:
+            model_latents = torch.cat([latents, latents]) if use_guidance else latents
+            noise = unet(model_latents, timestep, encoder_hidden_states=model_context)
+            if use_guidance:
                 # The first half is the empty prompt; the second is the prompt.
-                model_latents = torch.cat([latents, latents])
-                noise_unconditional, noise_conditional = unet(
-                    model_latents,
-                    timestep,
-                    encoder_hidden_states=model_context,
-                ).chunk(2)
+                noise_unconditional, noise_conditional = noise.chunk(2)
                 noise = noise_unconditional + args.guidance * (
                     noise_conditional - noise_unconditional
                 )

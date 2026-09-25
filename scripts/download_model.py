@@ -20,9 +20,6 @@ from models.config import (
 from utils.runtime import configure_download_environment
 
 
-configure_download_environment()
-
-
 def verify_file(path, entry):
     if not path.is_file() or path.stat().st_size != entry["size"]:
         return False
@@ -185,10 +182,13 @@ def chunked_download(entries, workers):
 
 
 def main():
+    configure_download_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--transport", choices=["chunks", "curl", "hub"], default="chunks")
     parser.add_argument("--workers", type=int, choices=range(1, 17), default=8)
     args = parser.parse_args()
+    if args.transport != "hub" and not shutil.which("curl"):
+        parser.error("curl is missing; use --transport hub.")
 
     free = shutil.disk_usage(ROOT).free / 1024**3
     print(f"Model: {MODEL_ID}\nRevision: {REVISION}\nDestination: {MODEL_DIR}", flush=True)
@@ -201,8 +201,6 @@ def main():
     if args.transport == "chunks":
         chunked_download(manifest["files"], args.workers)
     elif args.transport == "curl":
-        if not shutil.which("curl"):
-            raise SystemExit("curl is missing; use --transport hub.")
         with ThreadPoolExecutor(max_workers=2) as executor:
             list(executor.map(curl_download, manifest["files"]))
     else:

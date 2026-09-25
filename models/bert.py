@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from models.layers import ConfigDict
+from models.config import ConfigDict
 
 
 class BertSelfAttention(nn.Module):
@@ -89,6 +89,7 @@ class LDMBertModel(nn.Module):
         )})
         self.config = config
         self.model = BertEncoder(config)
+        # Unused during text encoding, but required for strict checkpoint loading.
         self.to_logits = nn.Linear(config.d_model, config.vocab_size)
 
     @property

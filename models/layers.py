@@ -1,8 +1,7 @@
-"""Small PyTorch building blocks shared by the local U-Net and VQ-VAE.
+"""Small PyTorch building blocks shared by the local U-Net and KL autoencoder.
 
-The module names intentionally match the published checkpoint keys. This makes
-the relationship between a saved tensor and the layer that consumes it visible
-through ``model.named_parameters()`` and a debugger.
+The module names intentionally match the published checkpoint keys, so each
+saved tensor can be traced to the layer that consumes it.
 """
 import math
 
@@ -11,22 +10,12 @@ from torch import nn
 from torch.nn import functional as F
 
 
-class ConfigDict(dict):
-    """JSON config with both mapping and attribute access."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as error:
-            raise AttributeError(name) from error
-
-
 def group_norm(channels, eps):
     return nn.GroupNorm(32, channels, eps=eps, affine=True)
 
 
 class ResnetBlock2D(nn.Module):
-    """Pre-normalized residual block used throughout the U-Net and VQ-VAE."""
+    """Pre-normalized residual block shared by the U-Net and KL autoencoder."""
 
     def __init__(self, in_channels, out_channels, *, temb_channels=None, eps=1e-6):
         super().__init__()
@@ -47,6 +36,7 @@ class ResnetBlock2D(nn.Module):
     def forward(self, input_tensor, temb=None):
         hidden = self.conv1(self.nonlinearity(self.norm1(input_tensor)))
         if self.time_emb_proj is not None:
+            # Add the time vector at every spatial position of each channel.
             hidden = hidden + self.time_emb_proj(self.nonlinearity(temb))[:, :, None, None]
         hidden = self.conv2(self.nonlinearity(self.norm2(hidden)))
         residual = (
@@ -157,6 +147,7 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
 
     def forward(self, hidden, context):
+        # First relate image tokens to each other, then read the text tokens.
         hidden = hidden + self.attn1(self.norm1(hidden))
         hidden = hidden + self.attn2(self.norm2(hidden), context)
         return hidden + self.ff(self.norm3(hidden))
@@ -186,7 +177,7 @@ class SpatialTransformer(nn.Module):
 
 
 class VAESpatialAttention(nn.Module):
-    """Single-head spatial attention used in the VQ-VAE bottleneck."""
+    """Single-head spatial attention used in the KL autoencoder bottleneck."""
 
     def __init__(self, channels):
         super().__init__()

@@ -1,5 +1,15 @@
-"""Pinned checkpoint paths and upstream identity."""
+"""Shared configuration container and pinned checkpoint identity."""
 from pathlib import Path
+
+
+class ConfigDict(dict):
+    """Keep JSON keys accessible as attributes in the model definitions."""
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError as error:
+            raise AttributeError(name) from error
 
 
 ROOT = Path(__file__).resolve().parent.parent
