@@ -18,6 +18,27 @@ All three examples use the pretrained 256×256 checkpoint with 50 DDIM steps, gu
 
 ## Quick Start
 
+### Installation
+
+1. Create and activate a Python environment (or use an existing one):
+
+   ```bash
+   conda create -n diffusion python=3.12 -y
+   conda activate diffusion
+   ```
+
+2. Install a [PyTorch build for your platform](https://pytorch.org/get-started/locally/), then install the remaining packages:
+
+   ```bash
+   python -m pip install -r requirements.txt
+   ```
+
+3. Download the pinned checkpoint:
+
+   ```bash
+   python -m scripts.download_model
+   ```
+
 ### Generate with defaults
 
 ```bash
@@ -69,31 +90,6 @@ python generate.py --prompt "A red fox in a snowy forest, oil painting" --output
 
 ---
 
-## Installation
-
-1. Create and activate a Python environment (or use an existing one):
-
-   ```bash
-   conda create -n diffusion python=3.12 -y
-   conda activate diffusion
-   ```
-
-2. Install a [PyTorch build for your platform](https://pytorch.org/get-started/locally/), then install the remaining packages:
-
-   ```bash
-   python -m pip install -r requirements.txt
-   ```
-
-3. Download the pinned checkpoint:
-
-   ```bash
-   python -m scripts.download_model
-   ```
-
-The weights total approximately 5.73 GiB. The default downloader uses `curl` and checks for at least 13 GiB of free disk space while assembling files. If `curl` is unavailable, use `python -m scripts.download_model --transport hub`. Once downloaded, generation runs offline.
-
----
-
 ## Complete CLI Options
 
 ### Prompt and sampling
@@ -126,8 +122,8 @@ The checkpoint downloader, [`scripts/download_model.py`](scripts/download_model.
 
 | Option | Default | Meaning and allowed values |
 | :--- | :---: | :--- |
-| `--transport` | `chunks` | `chunks` (resumable ranged downloads), `curl` (whole files), or `hub` (Hugging Face Hub). |
-| `--workers` | `8` | Number of concurrent connections for `chunks`; integer from `1` to `16`. Other transports use their own fixed worker counts. |
+| `--transport` | `curl` | `curl` (continuous resumable files), `chunks` (resumable ranges for unreliable proxies), or `hub` (Hugging Face Hub). |
+| `--workers` | `8` | Concurrent files for `curl`/`hub`, or concurrent ranges for `chunks`; integer from `1` to `16`. |
 
 ---
 
