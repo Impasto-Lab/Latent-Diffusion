@@ -3,6 +3,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -17,7 +18,6 @@ from models.config import (
     REVISION,
     ROOT,
 )
-from utils.runtime import configure_download_environment
 
 BLOCK_SIZE = 16 * 1024**2
 
@@ -213,6 +213,14 @@ def chunked_download(entries, workers):
             chunk.unlink()
         directory.rmdir()
         target.with_name(target.name + ".part").unlink(missing_ok=True)
+
+
+def configure_download_environment():
+    os.environ.setdefault("HF_HOME", str(ROOT / ".cache" / "huggingface"))
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 
 def main():

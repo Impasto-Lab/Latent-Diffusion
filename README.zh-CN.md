@@ -10,7 +10,7 @@
 
 **文本编码 + 初始噪声 →（U-Net → CFG → DDIM）× 50 → 解码 → PNG**
 
-1. **编码文本。** 提示词和空文本分别转成 `[1, 77]` 的 token IDs，再经文本编码器得到 `context` 和 `unconditional`，各为 `[1, 77, 1280]`。按「空文本、提示词」顺序拼成 `model_context [2, 77, 1280]`。
+1. **编码文本。** 把 `["", prompt]`（空文本在前）一起转成 `[2, 77]` 的 token IDs，经文本编码器得到 `context [2, 77, 1280]`。
 2. **初始化潜变量。** 在 CPU 上用 `seed` 固定随机生成器，从标准正态分布采样 `latents [1, 4, 32, 32]`，再移到所选设备。
 3. **设置时间步。** `scheduler.set_timesteps(50)` 生成 `[981, 961, …, 21, 1]`，按此顺序去噪。
 4. **循环去噪。** 每个时间步执行下表中的三步，始终维护一份 `[1, 4, 32, 32]` 的 `latents`。
@@ -18,12 +18,12 @@
 
 | 单步操作 | 核心逻辑 | 输出形状 |
 | --- | --- | --- |
-| U-Net 预测噪声 | 拼接两份 `latents`，连同时间步和 `model_context` 输入 U-Net | `[2, 4, 32, 32]` |
+| U-Net 预测噪声 | 拼接两份 `latents`，连同时间步和 `context` 输入 U-Net | `[2, 4, 32, 32]` |
 | CFG 合成 | 按 batch 拆出空文本与提示词两路预测，按下式合成 `noise` | `[1, 4, 32, 32]` |
 | DDIM 更新 | `scheduler.step(...)` 更新 `latents`；默认 `eta=0`，不额外加噪 | `[1, 4, 32, 32]` |
 
 ```python
-noise = noise_unconditional + guidance * (noise_conditional - noise_unconditional)
+noise = noise_empty + guidance * (noise_prompt - noise_empty)
 ```
 
 > `guidance=1` 时跳过空文本编码、batch 拼接和 CFG 合成，U-Net 直接使用条件预测，batch 为 1。下文的 batch=2 来自 CFG 的两路预测，最终仍只生成一张图。
@@ -34,9 +34,9 @@ noise = noise_unconditional + guidance * (noise_conditional - noise_unconditiona
 
 | 输入 | 形状与用途 |
 | --- | --- |
-| `sample` | `[2, 4, 32, 32]`，两份相同的带噪潜变量 |
+| `latents` | `[2, 4, 32, 32]`，两份相同的带噪潜变量 |
 | `timestep` | 当前时间步扩展到 batch=2；正余弦编码得到 `[2, 320]`，再经 `Linear → SiLU → Linear` 得到 `temb [2, 1280]` |
-| `encoder_hidden_states` | `model_context [2, 77, 1280]`，为 cross-attention 提供文本条件 |
+| `context` | `[2, 77, 1280]`，为 cross-attention 提供文本条件 |
 
 特征图依次经过下列模块。**输出形状均指整个模块执行完毕后的 `hidden`。** 配置中的 `CrossAttnDownBlock2D` / `CrossAttnUpBlock2D`，分别由本地 `DownBlock2D` / `UpBlock2D` 开启注意力实现。
 

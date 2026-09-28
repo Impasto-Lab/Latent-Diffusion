@@ -1,23 +1,11 @@
-"""Shared configuration container and pinned checkpoint identity."""
+"""Paths and facts about the pinned checkpoint."""
 from pathlib import Path
-
-
-class ConfigDict(dict):
-    """Keep JSON keys accessible as attributes in the model definitions."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as error:
-            raise AttributeError(name) from error
-
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_ID = "CompVis/ldm-text2im-large-256"
 REVISION = "30de525ca11a880baea4962827fb6cb0bb268955"
-LATENT_SCALING_FACTOR = 0.18215  # Used by the original text-to-image pipeline.
-MODEL_DIR = Path(__file__).resolve().parent / "ldm-text2im-large-256"
-MANIFEST_PATH = Path(__file__).resolve().parent / "model_manifest.json"
+MODEL_DIR = ROOT / "models" / "ldm-text2im-large-256"
+MANIFEST_PATH = ROOT / "models" / "model_manifest.json"
 MODEL_FILES = (
     "model_index.json",
     "bert/config.json",
@@ -31,3 +19,7 @@ MODEL_FILES = (
     "tokenizer/tokenizer_config.json",
     "tokenizer/vocab.txt",
 )
+
+# The U-Net was trained on autoencoder latents multiplied by this constant,
+# which scales them to roughly unit variance. Not stored in the JSON configs.
+LATENT_SCALING_FACTOR = 0.18215

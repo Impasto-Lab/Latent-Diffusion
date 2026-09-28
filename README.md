@@ -96,11 +96,11 @@ python generate.py --prompt "A red fox in a snowy forest, oil painting" --output
 
 | Option | Default | Meaning and allowed values |
 | :--- | :---: | :--- |
-| `--prompt` | `A red fox in a snowy forest, oil painting` | Non-empty text description. The tokenizer pads or truncates it to 77 tokens. |
+| `--prompt` | `A red fox in a snowy forest, oil painting` | Text description (an empty prompt gives an unconditional sample). The tokenizer pads or truncates it to 77 tokens. |
 | `--steps` | `50` | Number of DDIM updates; integer from `1` to `999`. More steps require more U-Net calls. |
-| `--guidance` | `5.0` | Non-negative finite CFG scale. `1` runs only the conditioned branch; `0` uses the empty-prompt prediction. |
-| `--eta` | `0.0` | DDIM noise scale from `0` to `1`. `0` adds no noise during updates. |
-| `--seed` | `42` | Random seed from `0` (inclusive) to `2^63` (exclusive). Controls the initial noise and any noise added when eta is positive. |
+| `--guidance` | `5.0` | Classifier-free guidance scale. `1` runs only the conditioned branch; `0` uses the empty-prompt prediction. |
+| `--eta` | `0.0` | DDIM noise scale, normally `0` to `1`. `0` adds no noise during updates; `1` is DDPM-like. |
+| `--seed` | `42` | Random seed. Controls the initial noise and any noise added when eta is positive. |
 
 ### Image and output
 
@@ -108,14 +108,14 @@ python generate.py --prompt "A red fox in a snowy forest, oil painting" --output
 | :--- | :---: | :--- |
 | `--width` | `256` | Output width in pixels; at least `64` and a multiple of `64`. |
 | `--height` | `256` | Output height in pixels; at least `64` and a multiple of `64`. |
-| `--output` | `outputs/<timestamp>-seed<seed>.png` | PNG path. Parent folders are created; existing files are not overwritten. |
+| `--output` | `outputs/<timestamp>-seed<seed>.png` | PNG path. Parent folders are created; an existing file is overwritten. |
 
 ### Hardware and precision
 
 | Option | Default | Meaning and allowed values |
 | :--- | :---: | :--- |
 | `--device` | `auto` | `auto`, `cpu`, `mps`, `cuda`, or a numbered GPU such as `cuda:1`. `auto` prefers CUDA, then MPS, then CPU. |
-| `--dtype` | `auto` | `auto`, `float16`, `bfloat16`, or `float32`. Auto selects float16 on CUDA/MPS and float32 on CPU. CPU supports only float32; MPS does not support bfloat16; CUDA bfloat16 requires a compatible GPU. |
+| `--dtype` | `auto` | `auto`, `float16`, `bfloat16`, or `float32`. Auto selects float16 on CUDA/MPS and float32 on CPU. Half precision on CPU and bfloat16 on MPS may be unsupported by your PyTorch build. |
 | `-h`, `--help` | — | Show the command-line help. |
 
 The checkpoint downloader, [`scripts/download_model.py`](scripts/download_model.py), also accepts:
@@ -131,23 +131,18 @@ The checkpoint downloader, [`scripts/download_model.py`](scripts/download_model.
 
 ```text
 .
-├── generate.py             # Text-to-image inference entry point
+├── generate.py             # The whole pipeline, top to bottom: text -> DDIM loop -> decode -> PNG
 ├── requirements.txt        # Runtime dependencies (install PyTorch separately)
 ├── models/
-│   ├── bert.py             # Text encoder
-│   ├── unet.py             # Conditional noise predictor and skip connections
-│   ├── layers.py           # ResNet, attention, and shared layers
-│   ├── scheduler.py        # DDIM time steps and update equations
+│   ├── bert.py             # Text encoder (LDMBert)
+│   ├── unet.py             # Noise predictor: time embedding, text cross-attention, skip connections
 │   ├── autoencoder.py      # KL image encoder and decoder
-│   ├── loader.py           # Strict loading of pretrained weights
-│   └── config.py           # Checkpoint paths and shared configuration
-├── scripts/
-│   └── download_model.py  # Download and verify pretrained files
-└── utils/
-    ├── cli.py             # CLI options and input validation
-    ├── environment.py     # Device and precision selection
-    ├── runtime.py         # Environment setup before importing PyTorch
-    └── output.py          # PNG output path and saving
+│   ├── scheduler.py        # DDIM time steps and update equations
+│   ├── layers.py           # ResNet, resampling, and the shared attention function
+│   ├── loader.py           # Config reading and strict loading of pretrained weights
+│   └── config.py           # Checkpoint paths and constants
+└── scripts/
+    └── download_model.py   # Download and verify pretrained files
 ```
 
 ---
