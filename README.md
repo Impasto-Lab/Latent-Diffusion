@@ -4,7 +4,7 @@ An inference-only implementation of [Latent Diffusion Models](https://arxiv.org/
 
 [中文：论文与推理流程](README.zh-CN.md)
 
-[Pipeline animation](examples/ldm-pipeline.html): a step-by-step web animation (in Chinese) of one real run of `generate.py`, from tokenizing the prompt through 50 DDIM steps to the decoded PNG. Download the file and open it in a browser.
+[Pipeline animation](https://impasto-lab.github.io/Latent-Diffusion/examples/ldm-pipeline.html): a step-by-step web animation (in Chinese) of one real run of `generate.py`, from tokenizing the prompt through 50 DDIM steps to the decoded PNG. Opens directly in the browser.
 
 ---
 
