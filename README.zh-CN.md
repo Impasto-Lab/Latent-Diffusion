@@ -274,4 +274,4 @@ image = decoder(z / 0.18215)                     # generate.py:138
 
 最后一步从 t = 1 更新时，下一个时间步小于 0。scheduler 在这一步使用 $\bar\alpha_0$。
 
-[流程动画](https://impasto-lab.github.io/Latent-Diffusion/examples/ldm-pipeline.html) 的第 5 阶段显示每一步的真实系数。第 1 步，$\sqrt{1-\bar\alpha_t}=0.997$，$\sqrt{\bar\alpha_t}=0.076$。最后一步，$\sqrt{1-\bar\alpha_t}=0.041$，$\sqrt{\bar\alpha_t}=0.999$。
+[流程动画](https://impasto-lab.github.io/Latent-Diffusion/examples/ldm-pipeline.html) 的第 4 阶段显示每一步的真实系数。第 1 步，$\sqrt{1-\bar\alpha_t}=0.997$，$\sqrt{\bar\alpha_t}=0.076$。最后一步，$\sqrt{1-\bar\alpha_t}=0.041$，$\sqrt{\bar\alpha_t}=0.999$。
