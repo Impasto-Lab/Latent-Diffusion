@@ -1,44 +1,44 @@
 # 论文与推理流程
 
-本项目使用 LDM 公开预训练权重，文本编码器、U-Net、KL 自编码器和 DDIM 采样器均在本地实现。安装与运行见 [README](README.md)，理论背景见 [LDM 论文](https://arxiv.org/abs/2112.10752)。
+本项目加载 LDM 的公开预训练权重。文本编码器、U-Net、KL 自编码器和 DDIM 采样器由本仓库用 PyTorch 实现。安装与运行见 [README](README.md)，理论背景见 [LDM 论文](https://arxiv.org/abs/2112.10752)。
 
 ## 推理流程
 
-以下对应 [generate.py](generate.py) 的默认配置：**单张 256×256 图像、50 步、guidance=5、eta=0**。图像特征形状按 `[batch, channels, height, width]` 记。
+本节按 [generate.py](generate.py) 的默认设置讲解：一张 256×256 图像、50 步、`guidance=5`、`eta=0`。图像和潜变量的形状格式是 `[batch, channels, height, width]`。
 
 ### 整体步骤
 
 **文本编码 + 初始噪声 →（U-Net → CFG → DDIM）× 50 → 解码 → PNG**
 
-1. **编码文本。** 把 `["", prompt]`（空文本在前）一起转成 `[2, 77]` 的 token IDs，经文本编码器得到 `context [2, 77, 1280]`。
-2. **初始化潜变量。** 在 CPU 上用 `seed` 固定随机生成器，从标准正态分布采样 `latents [1, 4, 32, 32]`，再移到所选设备。
-3. **设置时间步。** `scheduler.set_timesteps(50)` 生成 `[981, 961, …, 21, 1]`，按此顺序去噪。
-4. **循环去噪。** 每个时间步执行下表中的三步，始终维护一份 `[1, 4, 32, 32]` 的 `latents`。
-5. **解码并保存。** `autoencoder.decode(latents / 0.18215)` 输出 `[1, 3, 256, 256]`；经 `(decoded / 2 + 0.5).clamp(0, 1)` 映射并裁剪到 `[0, 1]`，保存为 PNG。
+1. **编码文本。** tokenizer 把 `["", prompt]`（空文本在前）转成 `[2, 77]` 的 token IDs。文本编码器再把它们转成 `context [2, 77, 1280]`。
+2. **初始化潜变量。** 在 CPU 上用 `seed` 设置随机生成器，从标准正态分布采样 `latents [1, 4, 32, 32]`，再把它移到所选设备。
+3. **设置时间步。** `scheduler.set_timesteps(50)` 生成 `[981, 961, …, 21, 1]`。去噪按这个顺序进行。
+4. **循环去噪。** 每个时间步执行下表的三个操作。循环中始终只有一份 `[1, 4, 32, 32]` 的 `latents`。
+5. **解码并保存。** `autoencoder.decode(latents / 0.18215)` 输出 `[1, 3, 256, 256]`。再用 `(decoded / 2 + 0.5).clamp(0, 1)` 把值映射并裁剪到 `[0, 1]`，最后保存为 PNG。
 
-| 单步操作 | 核心逻辑 | 输出形状 |
+| 操作 | 做什么 | 输出形状 |
 | --- | --- | --- |
-| U-Net 预测噪声 | 拼接两份 `latents`，连同时间步和 `context` 输入 U-Net | `[2, 4, 32, 32]` |
-| CFG 合成 | 按 batch 拆出空文本与提示词两路预测，按下式合成 `noise` | `[1, 4, 32, 32]` |
-| DDIM 更新 | `scheduler.step(...)` 更新 `latents`；默认 `eta=0`，不额外加噪 | `[1, 4, 32, 32]` |
+| U-Net 预测噪声 | 把两份 `latents` 拼成 batch，与时间步和 `context` 一起输入 U-Net | `[2, 4, 32, 32]` |
+| CFG 合成 | 把 batch 拆成空文本和提示词两路预测，按下式合成 `noise` | `[1, 4, 32, 32]` |
+| DDIM 更新 | `scheduler.step(...)` 更新 `latents`。默认 `eta=0`，不加噪声 | `[1, 4, 32, 32]` |
 
 ```python
 noise = noise_empty + guidance * (noise_prompt - noise_empty)
 ```
 
-> `guidance=1` 时跳过空文本编码、batch 拼接和 CFG 合成，U-Net 直接使用条件预测，batch 为 1。下文的 batch=2 来自 CFG 的两路预测，最终仍只生成一张图。
+> `guidance=1` 时，代码跳过空文本编码、batch 拼接和 CFG 合成。U-Net 直接使用条件预测，batch 为 1。下文的 batch=2 来自 CFG 的两路预测。最终仍然只生成一张图。
 
 ### U-Net 内部：一次噪声预测
 
-对照 [ConditionalUNet.forward](models/unet.py)，先看三个输入：
+下面对照 [ConditionalUNet.forward](models/unet.py)。它有三个输入：
 
 | 输入 | 形状与用途 |
 | --- | --- |
 | `latents` | `[2, 4, 32, 32]`，两份相同的带噪潜变量 |
-| `timestep` | 当前时间步扩展到 batch=2；正余弦编码得到 `[2, 320]`，再经 `Linear → SiLU → Linear` 得到 `temb [2, 1280]` |
-| `context` | `[2, 77, 1280]`，为 cross-attention 提供文本条件 |
+| `timestep` | 当前时间步扩展到 batch=2。正余弦编码得到 `[2, 320]`，再经 `Linear → SiLU → Linear` 得到 `temb [2, 1280]` |
+| `context` | `[2, 77, 1280]`，cross-attention 的文本输入 |
 
-特征图依次经过下列模块。**输出形状均指整个模块执行完毕后的 `hidden`。** 配置中的 `CrossAttnDownBlock2D` / `CrossAttnUpBlock2D`，分别由本地 `DownBlock2D` / `UpBlock2D` 开启注意力实现。
+特征图依次经过下列模块。**输出形状指整个模块执行完毕后的 `hidden`。** 配置中的 `CrossAttnDownBlock2D` / `CrossAttnUpBlock2D`，在本地代码中对应带注意力的 `DownBlock2D` / `UpBlock2D`。
 
 | 阶段 | 模块 / 操作 | 输出形状 |
 | --- | --- | --- |
@@ -54,9 +54,9 @@ noise = noise_empty + guidance * (noise_prompt - noise_empty)
 | 上行 4 | `UpBlock2D`：注意力，不上采样 | `[2, 320, 32, 32]` |
 | 输出 | `GroupNorm → SiLU → conv_out` | `[2, 4, 32, 32]` |
 
-- **时间与文本条件：** ResNet 注入 `temb`，可改变通道数；带注意力的块再经 `SpatialTransformer`（self-attention → cross-attention → 前馈网络）融合文本，其输入、输出形状相同。
-- **跳跃连接（skip connection）：** 保存输入卷积和下行各层的特征；上行每个 ResNet 先沿通道维拼接对应特征，再处理。每个下行块有 2 个 ResNet，每个上行块有 3 个。
-- **采样位置：** 前三个下行块在末尾下采样，前三个上行块在末尾上采样；两侧最后一个块都保持空间尺寸。
+- **时间与文本条件：** ResNet 注入 `temb`，并可改变通道数。带注意力的块再经 `SpatialTransformer`（self-attention → cross-attention → 前馈网络）融合文本。`SpatialTransformer` 的输入和输出形状相同。
+- **跳跃连接（skip connection）：** 网络保存输入卷积和下行各层的特征。上行的每个 ResNet 先沿通道维拼接对应特征，再处理。每个下行块有 2 个 ResNet，每个上行块有 3 个。
+- **采样位置：** 前三个下行块在末尾下采样，前三个上行块在末尾上采样。两侧最后一个块都保持空间尺寸。
 
 ## 原理与实现
 
@@ -89,11 +89,11 @@ $$z=\mathcal E(x),\qquad \hat x=\mathcal D(z)$$
 - 256×256×3 的图像对应 32×32×4 的潜变量。元素数量从 196608 减少到 4096，即 1/48。
 - 实际耗时不一定减少到 1/48。
 
-压缩倍率是质量与计算量的折中。压缩太弱，节省的计算量少。压缩太强，图像会丢失细节。
+压缩倍率需要在图像质量和计算量之间取舍。压缩太弱，节省的计算量少。压缩太强，图像丢失细节。
 
 ### 2. 加噪公式
 
-扩散的全部计算都基于这个公式：
+加噪公式是扩散计算的基础：
 
 $$z_t=\sqrt{\bar\alpha_t}\,z_0+\sqrt{1-\bar\alpha_t}\,\epsilon$$
 
@@ -139,7 +139,7 @@ $$\mathcal L=\mathbb E\left[\|\epsilon-\epsilon_\theta(z_t,t,c)\|_2^2\right]$$
 
 在上面的示例中，U-Net 的正确输出是 0.8。U-Net 预测噪声，不直接预测图像。
 
-U-Net 需要输入 t。原因：同一个 $z_t$ 值在不同时间步中的噪声比例不同。在 t = 981，$z_t$ 主要是噪声。在 t = 21，$z_t$ 主要是信号。
+U-Net 需要输入 t，因为同一个 $z_t$ 值在不同时间步中的噪声比例不同。在 t = 981，$z_t$ 主要是噪声。在 t = 21，$z_t$ 主要是信号。
 
 这里的 $z_0$ 是缩放后的潜变量。训练时，自编码器的输出乘以 0.18215，使方差约等于 1。因此，解码前要用 `latents / 0.18215` 还原尺度。推理时没有反向传播，也不计算损失。
 
@@ -151,7 +151,7 @@ U-Net 需要输入 t。原因：同一个 $z_t$ 值在不同时间步中的噪�
 
 **① U-Net 预测两份噪声**（[generate.py:128](generate.py#L128)）
 
-代码把同一份潜变量复制为 batch = 2。第一份使用空提示，第二份使用提示词：
+代码把同一份潜变量复制为 batch = 2。第一份使用空提示词，第二份使用提示词：
 
 $$
 \begin{aligned}
@@ -182,7 +182,7 @@ $$\hat z_0=\frac{z_t-\sqrt{1-\bar\alpha_t}\,\hat\epsilon}{\sqrt{\bar\alpha_t}}=\
 
 **④ 用下一个时间步的系数重新混合**（[scheduler.py](models/scheduler.py) 的 `step()`）
 
-下一个时间步 p = 961。DDIM 用 $\hat z_0$ 和 $\hat\epsilon$ 计算 $z_p$：
+下一个时间步是 p = 961。DDIM 用 $\hat z_0$ 和 $\hat\epsilon$ 计算 $z_p$：
 
 $$z_p=\sqrt{\bar\alpha_p}\,\hat z_0+\sqrt{1-\bar\alpha_p-\sigma_t^2}\,\hat\epsilon+\sigma_t\,\xi$$
 
@@ -192,7 +192,7 @@ $$\sigma_t=\eta\sqrt{\frac{1-\bar\alpha_p}{1-\bar\alpha_t}\left(1-\frac{\bar\alp
 
 $$z_{961}=0.085\times1.0+0.996\times0.80=0.882$$
 
-`eta > 0` 时，每一步都采样 $\xi\sim\mathcal N(0,I)$。初始潜变量和 $\xi$ 都来自同一个使用固定 seed 的生成器。
+`eta > 0` 时，每一步都采样 $\xi\sim\mathcal N(0,I)$。初始潜变量和 $\xi$ 来自同一个固定 seed 的生成器。
 
 **要点：** 第 ④ 步的公式就是第 2 节的加噪公式。区别有两个：
 
@@ -214,7 +214,7 @@ $$\Delta\hat z_0=\frac{\sqrt{1-\bar\alpha_t}}{\sqrt{\bar\alpha_t}}\,\Delta\epsil
 | t = 981 | 0.997 / 0.076 ≈ 13 | 1.26 | 0.26 |
 | t = 21 | 0.140 / 0.990 ≈ 0.14 | 1.003 | 0.003 |
 
-在 t = 981，误差放大约 13 倍。因此，前几步解码 $\hat z_0$ 得到的图像只有模糊的色块。
+在 t = 981，误差放大约 13 倍。因此，前期解码 $\hat z_0$ 得到的图像只有模糊的色块。
 
 $z_p$ 受到的影响小得多。在 t = 981 → 961，$\hat z_0$ 在 $z_p$ 中的系数只有 0.085：
 
@@ -230,7 +230,7 @@ U-Net 的三个输入进入不同的位置。
 
 $$h=\mathrm{conv}_1(x)+W\,\mathrm{temb}$$
 
-每个通道加一个常数。同一通道的所有空间位置加相同的值。U-Net 用这个值判断当前的噪声强度。
+每个通道加一个常数：同一通道的所有空间位置加相同的值。U-Net 用这个值判断当前的噪声强度。
 
 **文本条件 c：** cross-attention 的 query 来自图像特征 $\varphi(z_t)$，key 和 value 来自文本特征：
 
@@ -238,7 +238,7 @@ $$Q=W_Q\,\varphi(z_t),\quad K=W_K\,c,\quad V=W_V\,c$$
 
 $$\operatorname{Attention}(Q,K,V)=\operatorname{softmax}\!\left(QK^\top/\sqrt d\right)V$$
 
-每个空间位置是一个 query。77 个文本 token 是 key 和 value。因此，不同的空间位置读取不同的文本信息。
+每个空间位置是一个 query。77 个文本 token 是 key 和 value。因此，不同的空间位置读取不同的文本特征。
 
 **示例：** 一个空间位置与 3 个 token 的分数是 2.0、0.5、0.1：
 
@@ -248,19 +248,19 @@ $$\operatorname{Attention}(Q,K,V)=\operatorname{softmax}\!\left(QK^\top/\sqrt d\
 | snowy | 0.5 | 1.65 | 0.16 |
 | [PAD] | 0.1 | 1.11 | 0.11 |
 
-输出是 $0.73\,V_{\text{fox}}+0.16\,V_{\text{snowy}}+0.11\,V_{\text{[PAD]}}$。这个位置主要读取 “fox” 的信息。
+输出是 $0.73\,V_{\text{fox}}+0.16\,V_{\text{snowy}}+0.11\,V_{\text{[PAD]}}$。这个位置主要读取 “fox” 的特征。
 
 文本编码器（LDMBert）与 LDM 一起训练，tokenizer 是 BERT 的 WordPiece 词表。不能把文本编码器换成其他 BERT 或 CLIP 权重。论文对空间对齐的条件（例如超分辨率、修复、语义图）使用拼接。这些任务需要各自的模型，不能只改本项目的参数。
 
 **下采样、上采样与跳跃连接：**
 
-- 下行路径把分辨率从 32×32 降到 4×4。每个位置的感受野变大，U-Net 可以判断整体构图。
-- 上行路径把分辨率从 4×4 升回 32×32。跳跃连接把下行路径的高分辨率特征拼接回来，补充细节。
+- 下行路径把特征图尺寸从 32×32 降到 4×4。每个位置的感受野变大，U-Net 可以判断整体构图。
+- 上行路径把特征图尺寸从 4×4 升回 32×32。跳跃连接把下行路径中尺寸较大的特征拼接回来，补充细节。
 - `conv_out` 输出 `[4, 32, 32]`。这是每个位置的噪声预测。
 
 ### 7. 完整流程
 
-训练使用 1000 个时间步。推理不需要调用 U-Net 1000 次。DDIM 从中选出 50 个时间步：981, 961, …, 21, 1。每一步跨越 20 个训练时间步。DDPM 也可以减少步数，但必须重新计算跳步的转移参数。
+训练使用 1000 个时间步。推理不需要调用 U-Net 1000 次。DDIM 从中选出 50 个时间步：981, 961, …, 21, 1。每一步跨过 20 个训练时间步。DDPM 也可以减少步数，但必须重新计算跳步的转移参数。
 
 ```text
 z = randn([1, 4, 32, 32])                       # t = 981，纯噪声
@@ -272,6 +272,6 @@ for t in [981, 961, ..., 21, 1]:
 image = decoder(z / 0.18215)                     # generate.py:138
 ```
 
-最后一步从 t = 1 更新时，下一个时间步小于 0。scheduler 在这一步使用 $\bar\alpha_0$。
+最后一步 t = 1 的下一个时间步小于 0。这一步 scheduler 改用 $\bar\alpha_0$。
 
 [流程动画](https://impasto-lab.github.io/Latent-Diffusion/examples/ldm-pipeline.html) 的第 4 阶段显示每一步的真实系数。第 1 步，$\sqrt{1-\bar\alpha_t}=0.997$，$\sqrt{\bar\alpha_t}=0.076$。最后一步，$\sqrt{1-\bar\alpha_t}=0.041$，$\sqrt{\bar\alpha_t}=0.999$。
